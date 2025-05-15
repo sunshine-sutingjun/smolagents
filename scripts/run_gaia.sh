@@ -1,12 +1,13 @@
 #!/bin/bash
 
 # 默认参数配置
-CONCURRENCY=8
-MODEL_ID="Qwen/Qwen2.5-72B-Instruct"
-RUN_NAME="default-run"
+CONCURRENCY=1
+MODEL_ID="Qwen/Qwen2.5-72B-Instruct-128K"
+RUN_NAME="test-run"
 SET_TO_RUN="test"
 USE_OPEN_MODELS=false
 USE_RAW_DATASET=true
+ENABLE_TELEMETRY=true
 
 # 显示帮助信息
 show_help() {
@@ -18,6 +19,7 @@ show_help() {
     echo "  -s, --set-to-run     数据集 (默认: validation)"
     echo "  -o, --open-models    使用开放模型 (默认: false)"
     echo "  -d, --raw-dataset    使用原始数据集 (默认: false)"
+    echo "  -p, --enable-telemetry 启用Phoenix遥测 (默认: false)"
     echo "  -h, --help           显示此帮助信息"
 }
 
@@ -46,6 +48,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -d|--raw-dataset)
             USE_RAW_DATASET=true
+            shift
+            ;;
+        -p|--enable-telemetry)
+            ENABLE_TELEMETRY=true
             shift
             ;;
         -h|--help)
@@ -81,6 +87,10 @@ fi
 
 if [ "$USE_RAW_DATASET" = true ]; then
     CMD="$CMD --use-raw-dataset"
+fi
+
+if [ "$ENABLE_TELEMETRY" = true ]; then
+    CMD="$CMD --enable-telemetry"
 fi
 
 # 显示将要执行的命令

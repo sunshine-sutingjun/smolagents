@@ -12,6 +12,8 @@ import datasets
 import pandas as pd
 from dotenv import load_dotenv
 from huggingface_hub import login, snapshot_download
+from phoenix.otel import register
+from openinference.instrumentation.smolagents import SmolagentsInstrumentor
 from scripts.reformulator import prepare_response
 from scripts.run_agents import (
     get_single_file_description,
@@ -42,6 +44,8 @@ from smolagents.models import OpenAIServerModel
 
 
 load_dotenv(override=True)
+register()
+SmolagentsInstrumentor().instrument()
 login(os.getenv("HF_TOKEN"))
 
 append_answer_lock = threading.Lock()
@@ -55,6 +59,9 @@ def parse_args():
     parser.add_argument("--set-to-run", type=str, default="validation")
     parser.add_argument("--use-open-models", type=bool, default=False)
     parser.add_argument("--use-raw-dataset", action="store_true")
+    parser.add_argument(
+        "--enable-telemetry", action="store_true", help="启用Phoenix遥测功能"
+    )
     return parser.parse_args()
 
 
@@ -325,6 +332,19 @@ def get_examples_to_answer(answers_file: str, eval_ds: datasets.Dataset) -> list
 def main():
     args = parse_args()
     print(f"Starting run with arguments: {args}")
+
+    # 如果启用遥测，启动Phoenix服务器
+    if args.enable_telemetry:
+        import subprocess
+        import threading
+
+        def run_phoenix_server():
+            subprocess.run(["python", "-m", "phoenix.server.main", "serve"])
+
+        # 在后台线程中启动Phoenix服务器
+        phoenix_thread = threading.Thread(target=run_phoenix_server, daemon=True)
+        phoenix_thread.start()
+        print("Phoenix telemetry server started in background")
 
     eval_ds = load_gaia_dataset(args.use_raw_dataset, args.set_to_run)
     print("Loaded evaluation dataset:")

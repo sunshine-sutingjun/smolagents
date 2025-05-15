@@ -9,13 +9,13 @@
 [CmdletBinding()]
 param(
     [Alias('c')]
-    [int]    $Concurrency     = 8,
+    [int]    $Concurrency     = 1,
 
     [Alias('m')]
     [string] $ModelId         = 'Qwen/Qwen2.5-72B-Instruct-128K',
 
     [Alias('r')]
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory=$false)]
     [string] $RunName='test-run',
 
     [Alias('s')]
