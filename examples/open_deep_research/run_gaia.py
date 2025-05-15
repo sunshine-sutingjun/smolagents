@@ -3,10 +3,11 @@ import argparse
 import json
 import os
 import threading
+import sys  # 添加sys导入
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, Optional, List, Tuple
 
 import datasets
 import pandas as pd
@@ -62,6 +63,11 @@ def parse_args():
     parser.add_argument(
         "--enable-telemetry", action="store_true", help="启用Phoenix遥测功能"
     )
+    parser.add_argument(
+        "--task-ids",
+        type=lambda s: [str(item) for item in s.split(",")],
+        help="指定要运行的task_id列表，用逗号分隔",
+    )
     return parser.parse_args()
 
 
@@ -88,6 +94,54 @@ BROWSER_CONFIG = {
 
 os.makedirs(f"./{BROWSER_CONFIG['downloads_folder']}", exist_ok=True)
 
+
+def distill_question(question: str, model: Model) -> Dict:
+    """
+    Use distiller to structure the question and extract key information
+
+    Args:
+        question: Original question text
+        model: Model used to process the question
+
+    Returns:
+        Dictionary containing structured information
+    """
+    prompt = f"""Please analyze and structure the following question:
+
+{question}
+
+Please provide the following structured output:
+1. Main Task: What is the main goal of this question
+2. Prerequisites: What are the prerequisites needed to solve this question
+3. Expected Output: What kind of answer is expected
+4. Possible Solution Steps: List possible steps to solve this
+5. Potential Challenges: What difficulties might be encountered during the solution process
+
+Output in JSON format.
+"""
+
+    response = model.generate(
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a professional question analysis assistant, skilled at breaking down complex questions into structured components.",
+            },
+            {"role": "user", "content": prompt},
+        ]
+    )
+
+    # Try to parse JSON response
+    try:
+        result = json.loads(response)
+    except json.JSONDecodeError:
+        # If unable to parse as JSON, return original response in a simple dictionary
+        result = {
+            "Main Task": "Failed to parse structured information",
+            "Original Response": response,
+            "Original Question": question,
+        }
+
+    return result
 
 def create_agent_team(model: Model):
     text_limit = 100000
@@ -125,7 +179,11 @@ def create_agent_team(model: Model):
         "task"
     ] += """You can navigate to .txt online files.
     If a non-html page is in another format, especially .pdf or a Youtube video, use tool 'inspect_file_as_text' to inspect it.
-    Additionally, if after some searching you find out that you need more information to answer the question, you can use `final_answer` with your request for clarification as argument to request for more information."""
+    Additionally, if after some searching you find out that you need more information to answer the question, you can use `final_answer` with your request for clarification as argument to request for more information.
+    
+    IMPORTANT: If you realize at any point that you cannot solve the problem, clearly state the reason why and which step of your plan is failing. 
+    Do not waste time continuing to try the same approach if you see it is not working. Instead, explain what's wrong and suggest what might need to be changed.
+    """
 
     manager_agent = CodeAgent(
         model=model,
@@ -136,6 +194,21 @@ def create_agent_team(model: Model):
         planning_interval=4,
         managed_agents=[text_webbrowser_agent],
     )
+
+    # 修改manager_agent的提示，增加提前停止的指导
+    manager_agent.prompt_templates["planning"][
+        "system"
+    ] += """
+IMPORTANT: If at any point you determine that the task cannot be completed, or if you encounter an insurmountable obstacle, 
+do NOT continue trying endlessly. Instead:
+1. Clearly identify which step of your plan is failing
+2. Explain why it's failing (be specific about what information is missing or what approach isn't working)
+3. Suggest what would need to change to make progress
+4. Then stop execution - do not waste resources on approaches that will not work
+
+This information will be used to improve the system.
+"""
+
     return manager_agent
 
 
@@ -215,16 +288,21 @@ def answer_single_question(
     model = OpenAIServerModel(**model_params)
     document_inspection_tool = TextInspectorTool(model, 100000)
 
+    # 第一步：使用distiller结构化问题
+    structured_question = distill_question(example["question"], model)
+
     agent = create_agent_team(model)
 
     augmented_question = (
-        """You have one question to answer. It is paramount that you provide a correct answer.
+        """You have one question to answer. 
 Give it all you can: I know for a fact that you have access to all the relevant tools to solve it and find the correct answer (the answer does exist).
-Failure or 'I cannot answer' or 'None found' will not be tolerated, success will be rewarded.
-Run verification steps if that's needed, you must make sure you find the correct answer! Here is the task:
+If you think failure is inevitable, you can output the reason.
+Run verification steps if needed. Here is the task:
 
 """
         + example["question"]
+        + "\n\nStructured Analysis:\n"
+        + json.dumps(structured_question, ensure_ascii=False, indent=2)
     )
 
     if example["file_name"]:
@@ -248,61 +326,109 @@ Run verification steps if that's needed, you must make sure you find the correct
 
     start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
-        # Run agent 🚀
-        final_result = agent.run(augmented_question)
+        # 修改Agent运行逻辑，增加提前停止能力
+        from smolagents.framework.base_agent import AgentParsingError
 
-        agent_memory = agent.write_memory_to_messages()
+        try:
+            # Run agent 🚀
+            final_result = agent.run(augmented_question)
+            agent_memory = agent.write_memory_to_messages()
+            final_result = prepare_response(
+                augmented_question, agent_memory, reformulation_model=model
+            )
 
-        final_result = prepare_response(
-            augmented_question, agent_memory, reformulation_model=model
-        )
+            output = str(final_result)
+            intermediate_steps = agent_memory
 
-        output = str(final_result)
-        for memory_step in agent.memory.steps:
-            memory_step.model_input_messages = None
-        intermediate_steps = agent_memory
+            # 初始化错误信息字段
+            parsing_error = False
+            iteration_limit_exceeded = False
+            failed_step = None
+            failure_reason = None
+            raised_exception = False
 
-        # Check for parsing errors which indicate the LLM failed to follow the required format
-        parsing_error = (
-            True
-            if any(["AgentParsingError" in step for step in intermediate_steps])
-            else False
-        )
+            # 检查是否有失败步骤
+            for i, step in enumerate(agent.memory.steps):
+                if any(
+                    error_term in str(step)
+                    for error_term in ["error", "failure", "failed", "cannot", "unable"]
+                ):
+                    failed_step = i
+                    failure_reason = str(step)
+                    # 如果检测到失败，直接停止
+                    break
 
-        # check if iteration limit exceeded
-        iteration_limit_exceeded = (
-            True
-            if "Agent stopped due to iteration limit or time limit." in output
-            else False
-        )
-        raised_exception = False
+        except AgentParsingError as e:
+            output = f"解析错误: {str(e)}"
+            intermediate_steps = (
+                agent.memory.steps
+                if hasattr(agent, "memory") and hasattr(agent.memory, "steps")
+                else []
+            )
+            parsing_error = True
+            failed_step = len(intermediate_steps) - 1 if intermediate_steps else 0
+            failure_reason = str(e)
+            raised_exception = True
+
+        except Exception as e:
+            output = f"执行错误: {str(e)}"
+            intermediate_steps = (
+                agent.memory.steps
+                if hasattr(agent, "memory") and hasattr(agent.memory, "steps")
+                else []
+            )
+            failed_step = len(intermediate_steps) - 1 if intermediate_steps else 0
+            failure_reason = str(e)
+            raised_exception = True
+
+        # 清理内存中的大型消息
+        if hasattr(agent, "memory") and hasattr(agent.memory, "steps"):
+            for memory_step in agent.memory.steps:
+                if hasattr(memory_step, "model_input_messages"):
+                    memory_step.model_input_messages = None
 
     except Exception as e:
         print("Error on ", augmented_question, e)
-        output = None
+        output = f"未处理异常: {str(e)}"
         intermediate_steps = []
         parsing_error = False
         iteration_limit_exceeded = False
-        exception = e
+        failed_step = 0
+        failure_reason = str(e)
         raised_exception = True
+
     end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    token_counts_manager = agent.monitor.get_total_token_counts()
-    token_counts_web = list(agent.managed_agents.values())[
-        0
-    ].monitor.get_total_token_counts()
-    total_token_counts = {
-        "input": token_counts_manager["input"] + token_counts_web["input"],
-        "output": token_counts_manager["output"] + token_counts_web["output"],
-    }
+
+    # 计算token使用情况
+    try:
+        token_counts_manager = agent.monitor.get_total_token_counts()
+        token_counts_web = list(agent.managed_agents.values())[
+            0
+        ].monitor.get_total_token_counts()
+        total_token_counts = {
+            "input": token_counts_manager["input"] + token_counts_web["input"],
+            "output": token_counts_manager["output"] + token_counts_web["output"],
+        }
+    except Exception as e:
+        total_token_counts = {"input": 0, "output": 0, "error": str(e)}
+
+    # 准备结果记录
     annotated_example = {
         "agent_name": model.model_id,
         "question": example["question"],
+        "structured_question": structured_question,
         "augmented_question": augmented_question,
         "prediction": output,
         "intermediate_steps": intermediate_steps,
         "parsing_error": parsing_error,
         "iteration_limit_exceeded": iteration_limit_exceeded,
-        "agent_error": str(exception) if raised_exception else None,
+        "agent_error": (
+            str(exception)
+            if raised_exception and "exception" in locals()
+            else failure_reason
+        ),
+        "failed_step": failed_step,
+        "failure_reason": failure_reason,
         "task": example["task"],
         "task_id": example["task_id"],
         "true_answer": example["true_answer"],
@@ -330,28 +456,68 @@ def get_examples_to_answer(answers_file: str, eval_ds: datasets.Dataset) -> list
 
 
 def main():
-    args = parse_args()
-    print(f"Starting run with arguments: {args}")
+    # 硬编码的参数配置
+    args = type(
+        "Args",
+        (),
+        {
+            "concurrency": 1,  # 并发数
+            "model_id": "Qwen/Qwen2.5-72B-Instruct-128K",  # 模型ID
+            "run_name": "test",  # 运行名称
+            "set_to_run": "validation",  # 数据集集，只能是 validation 或 test
+            "use_open_models": False,  # 是否使用开源模型
+            "use_raw_dataset": False,  # 是否使用原始数据集
+            "enable_telemetry": True,  # 是否启用遥测
+            "task_ids": [
+                "17b5a6a3-bc87-42e8-b0fb-6ab0781ef2cc",
+                "e1fc63a2-da7a-432f-be78-7c4a95598703",
+                "8e867cd7-cff9-4e6c-867a-ff5ddc2550be",
+                "bec74516-02fc-48dc-b202-55e78d0e17cf",
+                "84d0dd8-e8a4-4cfe-963c-d37f256e7662",
+            ],  # 指定要运行的task_id列表
+        },
+    )()
+
+    print(f"Starting run with configuration: {args.__dict__}")
 
     # 如果启用遥测，启动Phoenix服务器
     if args.enable_telemetry:
-        import subprocess
-        import threading
+        try:
+            import subprocess
+            import threading
 
-        def run_phoenix_server():
-            subprocess.run(["python", "-m", "phoenix.server.main", "serve"])
+            def run_phoenix_server():
+                subprocess.run([sys.executable, "-m", "phoenix.server.main", "serve"])
 
-        # 在后台线程中启动Phoenix服务器
-        phoenix_thread = threading.Thread(target=run_phoenix_server, daemon=True)
-        phoenix_thread.start()
-        print("Phoenix telemetry server started in background")
+            # 在后台线程中启动Phoenix服务器
+            phoenix_thread = threading.Thread(target=run_phoenix_server, daemon=True)
+            phoenix_thread.start()
+            print("Phoenix telemetry server started in background")
+        except Exception as e:
+            print(f"Warning: Failed to start Phoenix server: {e}")
+            print("Continuing without telemetry...")
 
     eval_ds = load_gaia_dataset(args.use_raw_dataset, args.set_to_run)
     print("Loaded evaluation dataset:")
     print(pd.DataFrame(eval_ds)["task"].value_counts())
 
-    answers_file = f"output/{args.set_to_run}/{args.run_name}.jsonl"
+    # 确保输出目录存在
+    output_dir = f"output/{args.set_to_run}"
+    os.makedirs(output_dir, exist_ok=True)
+    answers_file = f"{output_dir}/{args.run_name}.jsonl"
+
     tasks_to_run = get_examples_to_answer(answers_file, eval_ds)
+
+    # 如果指定了task_ids，只运行这些tasks
+    if args.task_ids is not None:
+        tasks_to_run = [
+            task for task in tasks_to_run if task["task_id"] in args.task_ids
+        ]
+        if not tasks_to_run:
+            print(f"Warning: No tasks found with task_ids {args.task_ids}")
+            return
+        print(f"Running tasks with task_ids: {args.task_ids}")
+        print(f"Found {len(tasks_to_run)} tasks to run")
 
     with ThreadPoolExecutor(max_workers=args.concurrency) as exe:
         futures = [
@@ -365,8 +531,6 @@ def main():
         ):
             f.result()
 
-    # for example in tasks_to_run:
-    #     answer_single_question(example, args.model_id, answers_file, visualizer)
     print("All tasks processed.")
 
 
