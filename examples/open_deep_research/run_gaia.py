@@ -183,9 +183,6 @@ def create_agent_team(model: Model):
     ] += """You can navigate to .txt online files.
     If a non-html page is in another format, especially .pdf or a Youtube video, use tool 'inspect_file_as_text' to inspect it.
     Additionally, if after some searching you find out that you need more information to answer the question, you can use `final_answer` with your request for clarification as argument to request for more information.
-    
-    IMPORTANT: If you realize at any point that you cannot solve the problem, clearly state the reason why and which step of your plan is failing. 
-    Do not waste time continuing to try the same approach if you see it is not working. Instead, explain what's wrong and suggest what might need to be changed.
     """
 
     manager_agent = CodeAgent(
@@ -198,19 +195,19 @@ def create_agent_team(model: Model):
         managed_agents=[text_webbrowser_agent],
     )
 
-#     # 修改manager_agent的提示，增加提前停止的指导
-#     manager_agent.prompt_templates["planning"][
-#         "system"
-#     ] += """
-# IMPORTANT: If at any point you determine that the task cannot be completed, or if you encounter an insurmountable obstacle, 
-# do NOT continue trying endlessly. Instead:
-# 1. Clearly identify which step of your plan is failing
-# 2. Explain why it's failing (be specific about what information is missing or what approach isn't working)
-# 3. Suggest what would need to change to make progress
-# 4. Then stop execution - do not waste resources on approaches that will not work
+    #     # 修改manager_agent的提示，增加提前停止的指导
+    #     manager_agent.prompt_templates["planning"][
+    #         "system"
+    #     ] += """
+    # IMPORTANT: If at any point you determine that the task cannot be completed, or if you encounter an insurmountable obstacle,
+    # do NOT continue trying endlessly. Instead:
+    # 1. Clearly identify which step of your plan is failing
+    # 2. Explain why it's failing (be specific about what information is missing or what approach isn't working)
+    # 3. Suggest what would need to change to make progress
+    # 4. Then stop execution - do not waste resources on approaches that will not work
 
-# This information will be used to improve the system.
-# """
+    # This information will be used to improve the system.
+    # """
 
     return manager_agent
 
@@ -299,7 +296,6 @@ def answer_single_question(
     augmented_question = (
         """You have one question to answer. 
 Give it all you can: I know for a fact that you have access to all the relevant tools to solve it and find the correct answer (the answer does exist).
-If you think failure is inevitable, you can output the reason.
 Run verification steps if needed. Here is the task:
 
 """
@@ -328,68 +324,66 @@ Run verification steps if needed. Here is the task:
         augmented_question += prompt_use_files
 
     start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
     try:
-        # 修改Agent运行逻辑，增加提前停止能力
-        from smolagents.utils import AgentParsingError
+        # Run agent 🚀
+        final_result = agent.run(task=augmented_question)
 
-        try:
-            # Run agent 🚀
-            final_result = agent.run(augmented_question)
-            agent_memory = agent.write_memory_to_messages()
-            final_result = prepare_response(
-                augmented_question, agent_memory, reformulation_model=model
-            )
+        agent_memory = agent.write_memory_to_messages()
 
-            output = str(final_result)
-            intermediate_steps = agent_memory
+        # final_result = prepare_response(
+        #     augmented_question, agent_memory, reformulation_model=model
+        # )
 
-            # 初始化错误信息字段
-            parsing_error = False
-            iteration_limit_exceeded = False
-            failed_step = None
-            failure_reason = None
-            raised_exception = False
+        output = str(final_result)
+        for memory_step in agent.memory.steps:
+            memory_step.model_input_messages = None
+        intermediate_steps = agent_memory
 
-            # 检查是否有失败步骤
+        # Check for parsing errors which indicate the LLM failed to follow the required format
+        parsing_error = (
+            True
+            if any(["AgentParsingError" in step for step in intermediate_steps])
+            else False
+        )
+
+        # check if iteration limit exceeded
+        iteration_limit_exceeded = (
+            True
+            if "Agent stopped due to iteration limit or time limit." in output
+            else False
+        )
+        raised_exception = False
+
+        # 初始化失败信息，即使正常执行也需要这些字段
+        failed_step = None
+        failure_reason = None
+
+        # 分析是否有失败步骤
+        for i, step in enumerate(agent.memory.steps):
+            if hasattr(step, "error") and step.error is not None:
+                failed_step = i
+                failure_reason = str(step.error)
+                break
+
+        # 如果没有找到含有error属性的步骤，则通过关键词搜索
+        if failed_step is None:
             for i, step in enumerate(agent.memory.steps):
+                step_str = str(step)
                 if any(
-                    error_term in str(step)
-                    for error_term in ["error", "failure", "failed", "cannot", "unable"]
+                    error_term in step_str.lower()
+                    for error_term in [
+                        "error",
+                        "failure",
+                        "failed",
+                        "cannot",
+                        "unable",
+                        "impossible",
+                    ]
                 ):
                     failed_step = i
-                    failure_reason = str(step)
-                    # 如果检测到失败，直接停止
+                    failure_reason = step_str
                     break
-
-        except AgentParsingError as e:
-            output = f"解析错误: {str(e)}"
-            intermediate_steps = (
-                agent.memory.steps
-                if hasattr(agent, "memory") and hasattr(agent.memory, "steps")
-                else []
-            )
-            parsing_error = True
-            failed_step = len(intermediate_steps) - 1 if intermediate_steps else 0
-            failure_reason = str(e)
-            raised_exception = True
-
-        except Exception as e:
-            output = f"执行错误: {str(e)}"
-            intermediate_steps = (
-                agent.memory.steps
-                if hasattr(agent, "memory") and hasattr(agent.memory, "steps")
-                else []
-            )
-            failed_step = len(intermediate_steps) - 1 if intermediate_steps else 0
-            failure_reason = str(e)
-            raised_exception = True
-
-        # 清理内存中的大型消息
-        if hasattr(agent, "memory") and hasattr(agent.memory, "steps"):
-            for memory_step in agent.memory.steps:
-                if hasattr(memory_step, "model_input_messages"):
-                    memory_step.model_input_messages = None
-
     except Exception as e:
         print("Error on ", augmented_question, e)
         output = f"未处理异常: {str(e)}"
@@ -419,16 +413,14 @@ Run verification steps if needed. Here is the task:
     annotated_example = {
         "agent_name": model.model_id,
         "question": example["question"],
-        "structured_question": structured_question,
+        # "structured_question": structured_question,
         "augmented_question": augmented_question,
         "prediction": output,
         "intermediate_steps": intermediate_steps,
         "parsing_error": parsing_error,
         "iteration_limit_exceeded": iteration_limit_exceeded,
         "agent_error": (
-            str(exception)
-            if raised_exception and "exception" in locals()
-            else failure_reason
+            str(e) if raised_exception and "exception" in locals() else failure_reason
         ),
         "failed_step": failed_step,
         "failure_reason": failure_reason,
@@ -452,9 +444,7 @@ def get_examples_to_answer(answers_file: str, eval_ds: datasets.Dataset) -> list
         print("No usable records! ▶️ Starting new.")
         done_questions = []
     return [
-        line
-        for line in eval_ds.to_list()
-        if line["question"] not in done_questions and line["file_name"]
+        line for line in eval_ds.to_list() if line["question"] not in done_questions
     ]
 
 
@@ -466,17 +456,17 @@ def main():
         {
             "concurrency": 1,  # 并发数
             "model_id": "Qwen/Qwen2.5-72B-Instruct-128K",  # 模型ID
-            "run_name": "test",  # 运行名称
-            "set_to_run": "validation",  # 数据集集，只能是 validation 或 test
+            "run_name": "validation-1",  # 运行名称
+            "set_to_run": "validation",  # 数据集，只能是 validation 或 test
             "use_open_models": False,  # 是否使用开源模型
             "use_raw_dataset": False,  # 是否使用原始数据集
             "enable_telemetry": True,  # 是否启用遥测
             "task_ids": [
-                "17b5a6a3-bc87-42e8-b0fb-6ab0781ef2cc",
-                "e1fc63a2-da7a-432f-be78-7c4a95598703",
-                "8e867cd7-cff9-4e6c-867a-ff5ddc2550be",
-                "bec74516-02fc-48dc-b202-55e78d0e17cf",
-                "84d0dd8-e8a4-4cfe-963c-d37f256e7662",
+                # "17b5a6a3-bc87-42e8-b0fb-6ab0781ef2cc",
+                # "e1fc63a2-da7a-432f-be78-7c4a95598703",
+                # "8e867cd7-cff9-4e6c-867a-ff5ddc2550be",
+                # "bec74516-02fc-48dc-b202-55e78d0e17cf",
+                # "84d0dd8-e8a4-4cfe-963c-d37f256e7662",
             ],  # 指定要运行的task_id列表
         },
     )()
@@ -510,9 +500,8 @@ def main():
     answers_file = f"{output_dir}/{args.run_name}.jsonl"
 
     tasks_to_run = get_examples_to_answer(answers_file, eval_ds)
-
-    # 如果指定了task_ids，只运行这些tasks
-    if args.task_ids is not None:
+    # 如果指定了task_ids，只运行这些tasks；否则运行所有tasks
+    if args.task_ids is not None and len(args.task_ids) > 0:
         tasks_to_run = [
             task for task in tasks_to_run if task["task_id"] in args.task_ids
         ]
@@ -520,7 +509,9 @@ def main():
             print(f"Warning: No tasks found with task_ids {args.task_ids}")
             return
         print(f"Running tasks with task_ids: {args.task_ids}")
-        print(f"Found {len(tasks_to_run)} tasks to run")
+    else:
+        print("Running all tasks")
+    print(f"Found {len(tasks_to_run)} tasks to run")
 
     with ThreadPoolExecutor(max_workers=args.concurrency) as exe:
         futures = [
