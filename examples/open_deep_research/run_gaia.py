@@ -114,10 +114,6 @@ Please provide the following structured output:
 1. Main Task: What is the main goal of this question
 2. Prerequisites: What are the prerequisites needed to solve this question
 3. Expected Output: What kind of answer is expected
-4. Possible Solution Steps: List possible steps to solve this
-5. Potential Challenges: What difficulties might be encountered during the solution process
-
-Output in JSON format.
 """
 
     response = model.generate(
@@ -130,18 +126,25 @@ Output in JSON format.
         ]
     )
 
+    # 提取字符串内容，兼容ChatMessage对象
+    if hasattr(response, "content"):
+        response_content = response.content
+    else:
+        response_content = response
+
     # Try to parse JSON response
     try:
-        result = json.loads(response)
+        result = json.loads(response_content)
     except json.JSONDecodeError:
         # If unable to parse as JSON, return original response in a simple dictionary
         result = {
             "Main Task": "Failed to parse structured information",
-            "Original Response": response,
+            "Original Response": response_content,
             "Original Question": question,
         }
 
-    return result
+    return response_content
+
 
 def create_agent_team(model: Model):
     text_limit = 100000
@@ -195,19 +198,19 @@ def create_agent_team(model: Model):
         managed_agents=[text_webbrowser_agent],
     )
 
-    # 修改manager_agent的提示，增加提前停止的指导
-    manager_agent.prompt_templates["planning"][
-        "system"
-    ] += """
-IMPORTANT: If at any point you determine that the task cannot be completed, or if you encounter an insurmountable obstacle, 
-do NOT continue trying endlessly. Instead:
-1. Clearly identify which step of your plan is failing
-2. Explain why it's failing (be specific about what information is missing or what approach isn't working)
-3. Suggest what would need to change to make progress
-4. Then stop execution - do not waste resources on approaches that will not work
+#     # 修改manager_agent的提示，增加提前停止的指导
+#     manager_agent.prompt_templates["planning"][
+#         "system"
+#     ] += """
+# IMPORTANT: If at any point you determine that the task cannot be completed, or if you encounter an insurmountable obstacle, 
+# do NOT continue trying endlessly. Instead:
+# 1. Clearly identify which step of your plan is failing
+# 2. Explain why it's failing (be specific about what information is missing or what approach isn't working)
+# 3. Suggest what would need to change to make progress
+# 4. Then stop execution - do not waste resources on approaches that will not work
 
-This information will be used to improve the system.
-"""
+# This information will be used to improve the system.
+# """
 
     return manager_agent
 
@@ -289,7 +292,7 @@ def answer_single_question(
     document_inspection_tool = TextInspectorTool(model, 100000)
 
     # 第一步：使用distiller结构化问题
-    structured_question = distill_question(example["question"], model)
+    # structured_question = distill_question(example["question"], model)
 
     agent = create_agent_team(model)
 
@@ -301,8 +304,8 @@ Run verification steps if needed. Here is the task:
 
 """
         + example["question"]
-        + "\n\nStructured Analysis:\n"
-        + json.dumps(structured_question, ensure_ascii=False, indent=2)
+        # + "\n\nStructured Analysis:\n"
+        # + json.dumps(structured_question, ensure_ascii=False, indent=2)
     )
 
     if example["file_name"]:
@@ -327,7 +330,7 @@ Run verification steps if needed. Here is the task:
     start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
         # 修改Agent运行逻辑，增加提前停止能力
-        from smolagents.framework.base_agent import AgentParsingError
+        from smolagents.utils import AgentParsingError
 
         try:
             # Run agent 🚀
@@ -481,21 +484,21 @@ def main():
     print(f"Starting run with configuration: {args.__dict__}")
 
     # 如果启用遥测，启动Phoenix服务器
-    if args.enable_telemetry:
-        try:
-            import subprocess
-            import threading
+    # if args.enable_telemetry:
+    #     try:
+    #         import subprocess
+    #         import threading
 
-            def run_phoenix_server():
-                subprocess.run([sys.executable, "-m", "phoenix.server.main", "serve"])
+    #         def run_phoenix_server():
+    #             subprocess.run([sys.executable, "-m", "phoenix.server.main", "serve"])
 
-            # 在后台线程中启动Phoenix服务器
-            phoenix_thread = threading.Thread(target=run_phoenix_server, daemon=True)
-            phoenix_thread.start()
-            print("Phoenix telemetry server started in background")
-        except Exception as e:
-            print(f"Warning: Failed to start Phoenix server: {e}")
-            print("Continuing without telemetry...")
+    #         # 在后台线程中启动Phoenix服务器
+    #         phoenix_thread = threading.Thread(target=run_phoenix_server, daemon=True)
+    #         phoenix_thread.start()
+    #         print("Phoenix telemetry server started in background")
+    #     except Exception as e:
+    #         print(f"Warning: Failed to start Phoenix server: {e}")
+    #         print("Continuing without telemetry...")
 
     eval_ds = load_gaia_dataset(args.use_raw_dataset, args.set_to_run)
     print("Loaded evaluation dataset:")
