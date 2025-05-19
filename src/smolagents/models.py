@@ -23,6 +23,8 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from threading import Thread
 from typing import TYPE_CHECKING, Any
+import time
+import functools
 
 from .tools import Tool
 from .utils import (
@@ -62,6 +64,40 @@ def get_dict_from_nested_dataclasses(obj, ignore_key=None):
         return obj
 
     return convert(obj)
+
+
+def retry_on_429(max_retries=5, base_delay=1):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            retries = 0
+            delay = base_delay
+            while True:
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    # 检查是否为429错误
+                    if hasattr(e, "status_code") and e.status_code == 429:
+                        if retries < max_retries:
+                            time.sleep(delay)
+                            retries += 1
+                            delay *= 2
+                        else:
+                            raise
+                    # openai等库有的用 e.http_status
+                    elif hasattr(e, "http_status") and e.http_status == 429:
+                        if retries < max_retries:
+                            time.sleep(delay)
+                            retries += 1
+                            delay *= 2
+                        else:
+                            raise
+                    else:
+                        raise
+
+        return wrapper
+
+    return decorator
 
 
 @dataclass
@@ -394,7 +430,7 @@ class Model:
                     "tools": [
                         get_tool_json_schema(tool) for tool in tools_to_call_from
                     ],
-                    "tool_choice": {"type": "function"},
+                    "tool_choice": "auto",
                 }
             )
 
@@ -1496,6 +1532,7 @@ class OpenAIServerModel(ApiModel):
 
         return openai.OpenAI(**self.client_kwargs)
 
+    @retry_on_429()
     def generate_stream(
         self,
         messages: list[dict[str, str | list[dict]]],
@@ -1531,6 +1568,7 @@ class OpenAIServerModel(ApiModel):
                 self.last_input_token_count = event.usage.prompt_tokens
                 self.last_output_token_count = event.usage.completion_tokens
 
+    @retry_on_429()
     def generate(
         self,
         messages: list[dict[str, str | list[dict]]],

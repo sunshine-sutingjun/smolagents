@@ -42,6 +42,8 @@ from smolagents import (
 )
 from smolagents.models import InferenceClientModel
 from smolagents.models import OpenAIServerModel
+from rich.console import Console
+from rich.terminal_theme import MONOKAI
 
 
 load_dotenv(override=True)
@@ -50,6 +52,32 @@ SmolagentsInstrumentor().instrument()
 login(os.getenv("HF_TOKEN"))
 
 append_answer_lock = threading.Lock()
+
+# 检查是否需要捕获 rich HTML 输出
+RICH_HTML_OUTPUT_ENABLED = True
+RICH_HTML_OUTPUT_PATH = "output/rich_captures/rich_output.html"
+if RICH_HTML_OUTPUT_ENABLED:
+    os.makedirs(os.path.dirname(RICH_HTML_OUTPUT_PATH), exist_ok=True)
+    console = Console(record=True)
+    _orig_print = print
+
+    def rich_print(*args, **kwargs):
+        sep = kwargs.get("sep", " ")
+        end = kwargs.get("end", "\n")
+        msg = (
+            sep.join(
+                str(a)
+                .encode("utf-8", errors="replace")
+                .decode("utf-8", errors="replace")
+                for a in args
+            )
+            + end
+        )
+        console.print(msg, end="")
+
+    print = rich_print
+else:
+    console = None
 
 
 def parse_args():
@@ -433,6 +461,11 @@ Run verification steps if needed. Here is the task:
     }
     append_answer(annotated_example, answers_file)
 
+    # 每个task后保存rich日志
+    # TODO 这个功能好像不太正常
+    if RICH_HTML_OUTPUT_PATH and console is not None:
+        console.save_html(RICH_HTML_OUTPUT_PATH, theme=MONOKAI)
+
 
 def get_examples_to_answer(answers_file: str, eval_ds: datasets.Dataset) -> list[dict]:
     print(f"Loading answers from {answers_file}...")
@@ -529,4 +562,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        if RICH_HTML_OUTPUT_PATH and console is not None:
+            console.save_html(RICH_HTML_OUTPUT_PATH, theme=MONOKAI)

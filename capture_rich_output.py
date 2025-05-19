@@ -10,6 +10,7 @@ import sys
 import subprocess
 from rich.console import Console
 from rich.terminal_theme import MONOKAI
+import copy
 
 
 def main():
@@ -35,6 +36,10 @@ def main():
         command_str = " ".join(command)
         console.print(f"运行命令: [bold cyan]{command_str}[/]")
 
+        # 创建env字典并添加PYTHONIOENCODING
+        env = copy.deepcopy(os.environ)
+        env["PYTHONIOENCODING"] = "utf-8"
+
         # 运行命令并实时捕获输出
         process = subprocess.Popen(
             command,
@@ -43,6 +48,7 @@ def main():
             text=True,
             bufsize=1,
             universal_newlines=True,
+            env=env,
         )
 
         # 逐行读取输出并显示
