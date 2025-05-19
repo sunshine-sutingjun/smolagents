@@ -166,7 +166,7 @@ You can run agents from CLI using two commands: `smolagent` and `webagent`.
 smolagent "Plan a trip to Tokyo, Kyoto and Osaka between Mar 28 and Apr 7."  --model-type "InferenceClientModel" --model-id "Qwen/Qwen2.5-Coder-32B-Instruct" --imports "pandas numpy" --tools "web_search"
 ```
 
-Meanwhile `webagent` is a specific web-browsing agent using [helium](https://github.com/mherrmann/helium) (read more [here](https://github.com/huggingface/smolagents/blob/main/src/smolagents/vision_web_browser.py)).
+Meanwhile `webagent` is a specific web-browsing agent using [helium](https://github.com/mherrmann/helium) (read more [here](https://github.com/huggingface/smolagents/blob/main/src/smolagents/vision_web_browser.py)).
 
 For instance:
 ```bash
@@ -259,4 +259,30 @@ If you use `smolagents` in your publication, please cite it by using the followi
   howpublished = {\url{https://github.com/huggingface/smolagents}},
   year =         {2025}
 }
+```
+
+```
+smolagents
+└─ src
+   └─ smolagents
+      ├─ agents.py                  # 智能体（Agent）核心实现，包含多步推理Agent，Agent基类和具体实现（如CodeAgent、ToolCallingAgent等）
+      ├─ agent_types.py             # 定义智能体输入/输出的类型（如文本、图片、音频），以及类型处理相关工具
+      ├─ cli.py                     # 命令行入口，参数解析，支持通过命令行运行智能体任务
+      ├─ default_tools.py           # 内置常用工具的实现（如Python解释器、网页搜索、维基百科、语音转文本等）
+      ├─ gradio_ui.py               # Gradio 前端界面，支持与智能体的可视化交互和消息流展示
+      ├─ local_python_executor.py   # 本地 Python 代码安全执行器，负责代码沙箱、变量管理、导入控制等
+      ├─ mcp_client.py              # MCP（主控平台）客户端，管理与MCP服务器的连接与工具获取
+      ├─ memory.py                  # 智能体记忆模块，定义任务、步骤、计划、工具调用等数据结构及其序列化
+      ├─ models.py                  # 智能体支持的各类大模型（如OpenAI、Transformers、LiteLLM等）及消息、角色、流式输出等数据结构
+      ├─ monitoring.py              # 日志与监控模块，支持日志分级、富文本输出、运行监控等
+      ├─ prompts
+      │  ├─ code_agent.yaml         # 代码智能体的提示词模板，包含多步推理、工具调用、计划等详细指令
+      │  └─ toolcalling_agent.yaml  # 工具调用型智能体的提示词模板，强调Action/Observation循环与工具参数规范
+      ├─ remote_executors.py        # 远程代码执行器（如E2B、Docker），支持在沙箱或容器中安全运行代码
+      ├─ tools.py                   # 工具（Tool）基类、工具注册与管理、Gradio/LangChain工具适配等
+      ├─ tool_validation.py         # 工具类的静态检查与校验，确保工具实现规范、参数类型正确
+      ├─ utils.py                   # 通用工具函数与异常定义，如JSON序列化、代码块提取、名称校验等
+      ├─ vision_web_browser.py      # 视觉网页浏览器自动化，集成Selenium/Helium，支持网页截图、元素交互等
+      ├─ _function_type_hints_utils.py # 类型提示（包括函数）与docstring解析工具，生成JSON schema，辅助工具参数校验
+      └─ __init__.py                # 包初始化，导出所有核心模块，定义版本号
 ```

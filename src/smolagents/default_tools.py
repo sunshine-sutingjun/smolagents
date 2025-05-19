@@ -50,7 +50,9 @@ class PythonInterpreterTool(Tool):
         if authorized_imports is None:
             self.authorized_imports = list(set(BASE_BUILTIN_MODULES))
         else:
-            self.authorized_imports = list(set(BASE_BUILTIN_MODULES) | set(authorized_imports))
+            self.authorized_imports = list(
+                set(BASE_BUILTIN_MODULES) | set(authorized_imports)
+            )
         self.inputs = {
             "code": {
                 "type": "string",
@@ -72,7 +74,9 @@ class PythonInterpreterTool(Tool):
                 state=state,
                 static_tools=self.base_python_tools,
                 authorized_imports=self.authorized_imports,
-            )[0]  # The second element is boolean is_final_answer
+            )[
+                0
+            ]  # The second element is boolean is_final_answer
         )
         return f"Stdout:\n{str(state['_print_outputs'])}\nOutput: {output}"
 
@@ -80,7 +84,9 @@ class PythonInterpreterTool(Tool):
 class FinalAnswerTool(Tool):
     name = "final_answer"
     description = "Provides a final answer to the given problem."
-    inputs = {"answer": {"type": "any", "description": "The final answer to the problem"}}
+    inputs = {
+        "answer": {"type": "any", "description": "The final answer to the problem"}
+    }
     output_type = "any"
 
     def forward(self, answer: Any) -> Any:
@@ -90,7 +96,9 @@ class FinalAnswerTool(Tool):
 class UserInputTool(Tool):
     name = "user_input"
     description = "Asks for user's input on a specific question"
-    inputs = {"question": {"type": "string", "description": "The question to ask the user"}}
+    inputs = {
+        "question": {"type": "string", "description": "The question to ask the user"}
+    }
     output_type = "string"
 
     def forward(self, question):
@@ -101,7 +109,9 @@ class UserInputTool(Tool):
 class DuckDuckGoSearchTool(Tool):
     name = "web_search"
     description = """Performs a duckduckgo web search based on your query (think a Google search) then returns the top search results."""
-    inputs = {"query": {"type": "string", "description": "The search query to perform."}}
+    inputs = {
+        "query": {"type": "string", "description": "The search query to perform."}
+    }
     output_type = "string"
 
     def __init__(self, max_results=10, **kwargs):
@@ -119,7 +129,10 @@ class DuckDuckGoSearchTool(Tool):
         results = self.ddgs.text(query, max_results=self.max_results)
         if len(results) == 0:
             raise Exception("No results found! Try a less restrictive/shorter query.")
-        postprocessed_results = [f"[{result['title']}]({result['href']})\n{result['body']}" for result in results]
+        postprocessed_results = [
+            f"[{result['title']}]({result['href']})\n{result['body']}"
+            for result in results
+        ]
         return "## Search Results\n\n" + "\n\n".join(postprocessed_results)
 
 
@@ -149,7 +162,9 @@ class GoogleSearchTool(Tool):
             api_key_env_name = "SERPER_API_KEY"
         self.api_key = os.getenv(api_key_env_name)
         if self.api_key is None:
-            raise ValueError(f"Missing API key. Make sure you have '{api_key_env_name}' in your env variables.")
+            raise ValueError(
+                f"Missing API key. Make sure you have '{api_key_env_name}' in your env variables."
+            )
 
     def forward(self, query: str, filter_year: int | None = None) -> str:
         import requests
@@ -169,7 +184,9 @@ class GoogleSearchTool(Tool):
             }
             base_url = "https://google.serper.dev/search"
         if filter_year is not None:
-            params["tbs"] = f"cdr:1,cd_min:01/01/{filter_year},cd_max:12/31/{filter_year}"
+            params["tbs"] = (
+                f"cdr:1,cd_min:01/01/{filter_year},cd_max:12/31/{filter_year}"
+            )
 
         response = requests.get(base_url, params=params)
 
@@ -184,9 +201,13 @@ class GoogleSearchTool(Tool):
                     f"No results found for query: '{query}' with filtering on year={filter_year}. Use a less restrictive query or do not filter on year."
                 )
             else:
-                raise Exception(f"No results found for query: '{query}'. Use a less restrictive query.")
+                raise Exception(
+                    f"No results found for query: '{query}'. Use a less restrictive query."
+                )
         if len(results[self.organic_key]) == 0:
-            year_filter_message = f" with filter year={filter_year}" if filter_year is not None else ""
+            year_filter_message = (
+                f" with filter year={filter_year}" if filter_year is not None else ""
+            )
             return f"No results found for '{query}'{year_filter_message}. Try with a more general query, or remove the year filter."
 
         web_snippets = []
@@ -213,7 +234,9 @@ class GoogleSearchTool(Tool):
 class WebSearchTool(Tool):
     name = "web_search"
     description = "Performs a web search for a query and returns a string of the top search results formatted as markdown with titles, links, and descriptions."
-    inputs = {"query": {"type": "string", "description": "The search query to perform."}}
+    inputs = {
+        "query": {"type": "string", "description": "The search query to perform."}
+    }
     output_type = "string"
 
     def __init__(self, max_results: int = 10, engine: str = "duckduckgo"):
@@ -237,7 +260,10 @@ class WebSearchTool(Tool):
 
     def parse_results(self, results: list) -> str:
         return "## Search Results\n\n" + "\n\n".join(
-            [f"[{result['title']}]({result['link']})\n{result['description']}" for result in results]
+            [
+                f"[{result['title']}]({result['link']})\n{result['description']}"
+                for result in results
+            ]
         )
 
     def search_duckduckgo(self, query: str) -> list:
@@ -284,7 +310,9 @@ class WebSearchTool(Tool):
                 elif tag == "tr":
                     # Store current result if all parts are present
                     if {"title", "description", "link"} <= self.current.keys():
-                        self.current["description"] = " ".join(self.current["description"])
+                        self.current["description"] = " ".join(
+                            self.current["description"]
+                        )
                         self.results.append(self.current)
                         self.current = {}
 
@@ -324,9 +352,7 @@ class WebSearchTool(Tool):
 
 class VisitWebpageTool(Tool):
     name = "visit_webpage"
-    description = (
-        "Visits a webpage at the given url and reads its content as a markdown string. Use this to browse webpages."
-    )
+    description = "Visits a webpage at the given url and reads its content as a markdown string. Use this to browse webpages."
     inputs = {
         "url": {
             "type": "string",
@@ -432,7 +458,9 @@ class WikipediaSearchTool(Tool):
                 "You must install `wikipedia-api` to run this tool: for instance run `pip install wikipedia-api`"
             ) from e
         if not user_agent:
-            raise ValueError("User-agent is required. Provide a meaningful identifier for your project.")
+            raise ValueError(
+                "User-agent is required. Provide a meaningful identifier for your project."
+            )
 
         self.user_agent = user_agent
         self.language = language
@@ -450,7 +478,9 @@ class WikipediaSearchTool(Tool):
         self.extract_format = extract_format_map[extract_format]
 
         self.wiki = wikipediaapi.Wikipedia(
-            user_agent=self.user_agent, language=self.language, extract_format=self.extract_format
+            user_agent=self.user_agent,
+            language=self.language,
+            extract_format=self.extract_format,
         )
 
     def forward(self, query: str) -> str:
